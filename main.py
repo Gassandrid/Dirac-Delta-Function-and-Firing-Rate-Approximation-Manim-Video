@@ -288,6 +288,27 @@ class ReasonsForDirac(Scene):
         self.wait(1)
 
 
+        # new part: focus on the neuron graph, section is about the goal of neuron graphs: finding the spikes and firing rate
+        title2 = Text("The goal of modeling neuron activity is to find the spikes and firing rate", font_size=36).to_edge(UP)
+
+        # fade out the old stuff, move graph to the center
+        self.play(
+            FadeOut(bit_axes),
+            FadeOut(square),
+            FadeOut(lif_eq),
+            FadeOut(subtitle),
+            FadeOut(title),
+            # move the neuron graph to the center
+            # this is the axis, trade the x and y axis
+            neuron_axes.animate.move_to(ORIGIN).scale(1.5),
+            trace.animate.move_to(ORIGIN).scale(1.5),
+            # make this animation 1 second
+            run_time=1,
+        )
+
+        self.play(Write(title2))
+
+
 
 class DiracDeltaApproximation(Scene):
     """gossly simplified but visually intuitive Dirac‑delta derivation."""
