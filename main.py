@@ -236,6 +236,7 @@ class ReasonsForDirac(Scene):
             .to_edge(UP)
         )
         self.play(Write(title))
+        self.wait(0.5)
 
 
         bit_axes = create_axes(
@@ -243,7 +244,7 @@ class ReasonsForDirac(Scene):
         ).to_corner(LEFT + DOWN)
 
         # graph of digital oscillator
-        subtitle = Text("Digital circuits are very robust, and only oscillate between two values").scale(0.4).next_to(title, DOWN)
+        subtitle = Text("Digital circuits are very robust, \n and only oscillate between two values").scale(0.4).next_to(title, DOWN+1)
         # subtitle above the axes
         subtitle.move_to(bit_axes.get_top() + 0.5 * UP)
         self.play(Write(subtitle))
