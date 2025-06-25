@@ -2,35 +2,59 @@ from manim import *
 import numpy as np
 import math
 import os
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Optional
+from dataclasses import dataclass
 
 ###############################################################################
-# consts & simple data classess
+# constants and configuration
 ###############################################################################
 
-T: float = 10.0           # total time‑span (s)
-DT: float = 0.01          # simulation step (s)
+T: float = 10.0           # total time (s)
+DT: float = 0.01          # time step (s)
 FIRING_RATE: float = 5.0  # spikes/s
 SPIKE_HEIGHT: float = 3.0
 AXES_LENGTH: Tuple[float, float] = (13.3, 2.85)
 DEFAULT_X_RANGE = (0, T, 1)
 
+IZHIK_PARAMS = {
+    'a': 0.02,
+    'b': 0.2, 
+    'c': -65.0,
+    'd': 8.0,
+    'spike_threshold': 30.0
+}
+
+TUNING_PARAMS = {
+    'max_rate': 45,      # Hz
+    'min_rate': 5,       # Hz
+    'preferred_angle': 90,  # degrees
+    'sigma': 30          # degrees
+}
+
+
+@dataclass
+class SpikeTrainData:
+    """Data class for spike train information."""
+    time_points: np.ndarray
+    spikes: np.ndarray
+    rate: float
+
 
 class Ctx:
-    """Singleton‑like context for passing state between scenes."""
-
-    ## spike train
-    time_points: np.ndarray | None = None
-    spikes: np.ndarray | None = None
-
-    # discrete bin config
-    last_bin_count: int | None = None
-    last_bin_bars: VGroup | None = None
-    last_bin_axes_cfg: Dict | None = None
+    """Context for passing state between scenes."""
+    
+    # spike train data
+    time_points: Optional[np.ndarray] = None
+    spikes: Optional[np.ndarray] = None
+    
+    # binning configuration
+    last_bin_count: Optional[int] = None
+    last_bin_bars: Optional[VGroup] = None
+    last_bin_axes_cfg: Optional[Dict] = None
 
 
 ###############################################################################
-# helpers
+# utility functions
 ###############################################################################
 
 
@@ -38,10 +62,10 @@ def create_axes(
     x_range: Tuple[float, float, float] = DEFAULT_X_RANGE,
     y_range: Tuple[float, float, float] = (0, 6, 1),
     length: Tuple[float, float] = AXES_LENGTH,
-    label_x: str | None = None,
-    label_y: str | None = None,
+    label_x: Optional[str] = None,
+    label_y: Optional[str] = None,
 ) -> Axes:
-    """Factory for axes with optional labels."""
+    """Create axes with optional labels."""
     x_len, y_len = length
     axes = Axes(
         x_range=list(x_range),
@@ -62,7 +86,7 @@ def simulate_spike_train(
     dt_: float = DT,
     rate: float = FIRING_RATE,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Return (time_points, boolean spikes)."""
+    """Generate synthetic spike train data."""
     t = np.arange(0, T_, dt_)
     spikes = np.random.rand(len(t)) < rate * dt_
     return t, spikes
@@ -74,23 +98,23 @@ def spike_curve(
     spikes: np.ndarray,
     height: float = SPIKE_HEIGHT,
     collapsed: bool = False,
-    color=YELLOW,
+    color: str = YELLOW,
 ) -> VMobject:
-    """Return a VMobject polyline representing the spike train."""
-    pts: List[np.ndarray] = []
+    """Create VMobject representing spike train."""
+    points: List[np.ndarray] = []
     for tt, spk in zip(t, spikes):
         p0 = axes.c2p(tt, 0)
         if spk:
             if collapsed:
-                pts.extend([p0, p0, p0])
+                points.extend([p0, p0, p0])
             else:
-                pts.extend([p0, axes.c2p(tt, height), p0])
+                points.extend([p0, axes.c2p(tt, height), p0])
         else:
-            pts.append(p0)
-    return VMobject(color=color).set_points_as_corners(pts)
+            points.append(p0)
+    return VMobject(color=color).set_points_as_corners(points)
 
 
-def create_binned_visualisation(
+def create_binned_visualization(
     axes: Axes,
     t: np.ndarray,
     spikes: np.ndarray,
@@ -98,15 +122,15 @@ def create_binned_visualisation(
     dt_: float = DT,
     spike_height: float = SPIKE_HEIGHT,
 ) -> Tuple[VGroup, VGroup, VGroup]:
-    """Return (bin_lines, bin_containers, bars)."""
+    """Create binned visualization of spike train."""
     bins = np.linspace(0, T, num_bins + 1)
-    # count of spikes
+    
+    # count spikes in each bin
     counts = [
         int(np.sum(spikes[int(bins[i] / dt_) : int(bins[i + 1] / dt_)]))
         for i in range(num_bins)
     ]
 
-    # creating the visualisation
     bin_lines = VGroup()
     containers = VGroup()
     bars = VGroup()
@@ -115,24 +139,31 @@ def create_binned_visualisation(
     for i in range(num_bins):
         x0, x1 = bins[i], bins[i + 1]
         left, right = axes.c2p(x0, 0), axes.c2p(x1, 0)
-        # sub div line
-        bin_lines.add(DashedLine(start=left, end=axes.c2p(x0, y_max), dash_length=0.1, color=GREY_C))
-        # the "bucket" container
+        
+        # division line
+        bin_lines.add(DashedLine(
+            start=left, 
+            end=axes.c2p(x0, y_max), 
+            dash_length=0.1, 
+            color=GREY_C
+        ))
+        
+        # bucket container
         depth = 0.5
-        containers.add(
-            VGroup(
-                Line(left, right),
-                Line(left, [left[0], left[1] - depth, 0]),
-                Line(right, [right[0], right[1] - depth, 0]),
-                Line([left[0], left[1] - depth, 0], [right[0], right[1] - depth, 0]),
-            )
-        )
+        container_lines = [
+            Line(left, right),
+            Line(left, [left[0], left[1] - depth, 0]),
+            Line(right, [right[0], right[1] - depth, 0]),
+            Line([left[0], left[1] - depth, 0], [right[0], right[1] - depth, 0]),
+        ]
+        containers.add(VGroup(*container_lines))
+        
         # bar
         bar_width = (right[0] - left[0]) - 0.05
-        h = max(counts[i] * spike_height / 6, 0.01)
+        height = max(counts[i] * spike_height / 6, 0.01)
         bar = Rectangle(
             width=bar_width,
-            height=h,
+            height=height,
             fill_color=BLUE,
             fill_opacity=0.7,
             stroke_color=WHITE,
@@ -141,36 +172,41 @@ def create_binned_visualisation(
         bar.align_to(axes.c2p(x0 + 0.025, 0), LEFT + DOWN)
         bars.add(bar)
 
-    # final line to make bins closed
-    bin_lines.add(DashedLine(start=axes.c2p(T, 0), end=axes.c2p(T, y_max), dash_length=0.1, color=GREY_C))
+    # final closing line
+    bin_lines.add(DashedLine(
+        start=axes.c2p(T, 0), 
+        end=axes.c2p(T, y_max), 
+        dash_length=0.1, 
+        color=GREY_C
+    ))
 
     return bin_lines, containers, bars
 
 
-# -----------------------------------------------------------------------------
-# very rouhg Izhikevich neuron sim (regular‑spiking variant)
-# -----------------------------------------------------------------------------
-
-
-def simulate_izhikevich(total_ms: float = 400.0, dt_ms: float = 0.1, inj_pA: float = 70.0):
-
-    # Izhikevich regular‑spiking parameters
-    a, b, c, d = 0.02, 0.2, -65.0, 8.0
+def simulate_izhikevich(
+    total_ms: float = 400.0, 
+    dt_ms: float = 0.1, 
+    inj_pA: float = 70.0
+) -> Tuple[np.ndarray, float]:
+    """Simulate Izhikevich neuron model."""
+    a, b, c, d = IZHIK_PARAMS['a'], IZHIK_PARAMS['b'], IZHIK_PARAMS['c'], IZHIK_PARAMS['d']
+    spike_threshold = IZHIK_PARAMS['spike_threshold']
 
     steps = int(total_ms / dt_ms)
-    v = -65.0
+    v = c  # start at reset potential
     u = b * v
 
     v_trace = np.zeros(steps)
-
     I = np.zeros(steps)
-    t_on  = int(100 / dt_ms)
+    
+    # current injection
+    t_on = int(100 / dt_ms)
     t_off = int(200 / dt_ms)
     I[t_on:t_off] = inj_pA
 
     for t in range(steps):
-        if v >= 30.0: # spike threshold = 30
-            v_trace[t] = 30.0
+        if v >= spike_threshold:
+            v_trace[t] = spike_threshold
             v = c
             u += d
         else:
@@ -183,74 +219,114 @@ def simulate_izhikevich(total_ms: float = 400.0, dt_ms: float = 0.1, inj_pA: flo
 
     return v_trace, dt_ms
 
-# for caching the voltage trace
+
 _CACHE_FILE = "izhikevich_voltage.npz"
 
 
-def get_voltage_trace(overwrite: bool = False):
+def get_voltage_trace(overwrite: bool = False) -> Tuple[np.ndarray, float]:
+    """Get voltage trace with caching."""
     if os.path.exists(_CACHE_FILE) and not overwrite:
         with np.load(_CACHE_FILE, allow_pickle=True) as data:
             v_trace = data['v_trace']
             dt_ms = float(data['dt_ms'])
         return v_trace, dt_ms
+    
     v_trace, dt_ms = simulate_izhikevich()
     np.savez(_CACHE_FILE, v_trace=v_trace, dt_ms=dt_ms)
     return v_trace, dt_ms
 
+
+def generate_tuning_curve_rate(angle_deg: float) -> float:
+    """Generate firing rate for given orientation angle."""
+    max_rate = TUNING_PARAMS['max_rate']
+    min_rate = TUNING_PARAMS['min_rate']
+    preferred_angle = TUNING_PARAMS['preferred_angle']
+    sigma = TUNING_PARAMS['sigma']
+    
+    rate = min_rate + (max_rate - min_rate) * np.exp(
+        -((angle_deg - preferred_angle) ** 2) / (2 * sigma ** 2)
+    )
+    return rate
+
+
+def generate_spike_train_for_orientation(angle_deg: float) -> SpikeTrainData:
+    """Generate spike train for given orientation."""
+    rate = generate_tuning_curve_rate(angle_deg)
+    dt = 0.01
+    t = np.arange(0, 2, dt)
+    spikes = np.random.rand(len(t)) < rate * dt
+    return SpikeTrainData(t, spikes, rate)
+
+
 ###############################################################################
-# Scene mixin with common set‑up                                              #
+# base scene class
 ###############################################################################
 
 
 class SpikeScene(Scene):
-    """Base‑class providing axes + synthetic spike train."""
-
+    """Base scene providing axes and synthetic spike train."""
+    
     axes: Axes
     time_points: np.ndarray
     spikes: np.ndarray
 
     def setup_axes(self, y_label: str = "Amplitude") -> None:
+        """Setup axes for the scene."""
         self.axes = create_axes(label_x="Time (s)", label_y=y_label)
         self.axes.scale(0.95).to_edge(DOWN)
         self.add(self.axes)
 
     def setup_spikes(self) -> None:
+        """Setup spike train data."""
         if Ctx.time_points is None or Ctx.spikes is None:
             Ctx.time_points, Ctx.spikes = simulate_spike_train()
         self.time_points = Ctx.time_points
         self.spikes = Ctx.spikes
 
+
 ###############################################################################
-# Individual scenes                                                           #
+# scene implementations
 ###############################################################################
+
 
 class ReasonsForDirac(Scene):
-    """Compare a digital square wave with a realistic spiking‑neuron trace."""
+    """Compare digital circuits with biological neurons."""
 
     def construct(self):
-        # Scene 1
         # title
-        title = (
-            Text("Neurons behave very differently from the binary nature of computers.")
-            .scale(0.6)
-            .to_edge(UP)
-        )
+        title = Text(
+            "Neurons behave very differently from the binary nature of computers.",
+            font_size=32
+        ).to_edge(UP)
         self.play(Write(title))
         self.wait(0.5)
 
-        # Digital circuit on the left
+        # digital circuit
         bit_axes = create_axes(
-            y_range=(0, 2, 1), length=(5, 3), label_x="t", label_y="V (bits)"
+            y_range=(0, 2, 1), 
+            length=(5, 3), 
+            label_x="t", 
+            label_y="V (bits)"
         ).to_corner(LEFT + DOWN)
+
+        subtitle = Text(
+            "Digital circuits are very robust, \n and only oscillate between two values",
+            font_size=20
+        ).next_to(title, DOWN + 2)
+        subtitle.move_to(bit_axes.get_top() + 0.5 * UP)
+        self.play(Write(subtitle))
 
         self.play(Create(bit_axes))
 
-        square = bit_axes.plot(lambda x: 2 if int(x) % 2 == 0 else 0,
-                               x_range=[0, 8, 0.01], color=YELLOW)
+        square = bit_axes.plot(
+            lambda x: 2 if int(x) % 2 == 0 else 0,
+            x_range=[0, 8, 0.01], 
+            color=YELLOW
+        )
         self.play(Create(square))
-        self.wait(1)  
+        self.wait(1)
 
-        # neuron circuit on the right
+        # neuron circuit
         neuron_axes = create_axes(
             x_range=(0, 400, 50),
             y_range=(-80, 40, 20),
@@ -259,34 +335,47 @@ class ReasonsForDirac(Scene):
             label_y="V (mV)",
         ).to_corner(RIGHT + DOWN)
 
+        subtitle2 = Text(
+            "Biological neurons are much more complex, and have a continuous range of voltages",
+            font_size=20
+        ).next_to(title, DOWN)
+        subtitle2.move_to(neuron_axes.get_top() + 0.5 * UP)
+        self.play(Write(subtitle2))
+
         self.play(Create(neuron_axes))
 
-        # sim and create the voltage trace
+        lif_eq = MathTex(
+            r"\tau_m \frac{dV}{dt} = -(V-E_L) + \frac{I}{g_L}"
+        ).scale(0.5).next_to(subtitle2, DOWN, buff=0.3)
+        self.play(Write(lif_eq))
+
+        # simulate voltage trace
+        self.wait(0.5)
         voltage, dt_ms = get_voltage_trace()
         time_ms = np.arange(len(voltage)) * dt_ms
+
         points = [neuron_axes.c2p(t, v) for t, v in zip(time_ms, voltage)]
         trace = VMobject(color=YELLOW).set_points_smoothly(points)
         self.play(Create(trace), run_time=4)
-        self.wait(1)  
+        self.wait(1)
 
-        # equation hint
-        lif_eq = (
-            MathTex(r"\tau_m \frac{dV}{dt} = -(V-E_L) + \frac{I}{g_L}")
-            .scale(0.4)
-            .next_to(neuron_axes, UP, buff=0.2)
-        )
-        self.play(Write(lif_eq))
-        self.wait(0.5)
-        self.play(FadeOut(lif_eq))
+        # focus on neuron graph
+        title2 = Text(
+            "The goal of modeling neuron activity is to find the spikes and firing rate",
+            font_size=32
+        ).to_edge(UP)
 
-        # Scene 2
+        # fade out old elements
         self.play(
             FadeOut(bit_axes),
             FadeOut(square),
+            FadeOut(lif_eq),
+            FadeOut(subtitle),
+            FadeOut(subtitle2),
             FadeOut(title),
             neuron_axes.animate.move_to(ORIGIN).scale(1.5),
             trace.animate.move_to(ORIGIN).scale(1.5),
-            run_time=1.5,
+            run_time=1,
         )
 
         question = Text("What is the important information here?", font_size=32, color=YELLOW).to_edge(UP)
@@ -344,48 +433,80 @@ class ReasonsForDirac(Scene):
 
 
 class DiracDeltaApproximation(Scene):
-    """gossly simplified but visually intuitive Dirac‑delta derivation."""
+    """Visually intuitive Dirac-delta function derivation."""
 
     def construct(self):
-        question = Text("How can we describe something that happens at a single instant?", 
-                       font_size=32, color=YELLOW).to_edge(UP)
+        question = Text(
+            "How can we describe something that happens at a single instant?", 
+            font_size=32, 
+            color=YELLOW
+        ).to_edge(UP)
         self.play(Write(question))
         self.wait(1)
 
-        # Create axes
-        axes = create_axes(x_range=(-5, 5, 1), y_range=(0, 10, 1), length=(10, 6), 
-                          label_x="x", label_y="y").to_edge(DOWN)
+        # create axes
+        axes = create_axes(
+            x_range=(-5, 5, 1), 
+            y_range=(0, 10, 1), 
+            length=(10, 6), 
+            label_x="x", 
+            label_y="y"
+        ).to_edge(DOWN)
         self.play(Create(axes))
 
+        # parameter tracker
         a = ValueTracker(1.0)
 
         def lorentz(x: float) -> float:
+            """Lorentzian function that approaches delta function."""
             aa = max(a.get_value(), 0.01)
             return (1 / (math.pi * aa)) * (1 / (1 + (x / aa) ** 2))
 
-        # Create the Lorentzian graph and area
-        graph = always_redraw(lambda: axes.plot(lorentz, x_range=[-5, 5, 0.01], color=BLUE))
-        area = always_redraw(lambda: axes.get_area(graph, x_range=[-5, 5], color=BLUE_B, opacity=0.3))
+        # create animated graph and area
+        graph = always_redraw(lambda: axes.plot(
+            lorentz, 
+            x_range=[-5, 5, 0.01], 
+            color=BLUE
+        ))
+        area = always_redraw(lambda: axes.get_area(
+            graph, 
+            x_range=[-5, 5], 
+            color=BLUE_B, 
+            opacity=0.3
+        ))
         
-        label_a = always_redraw(lambda: MathTex(f"a={a.get_value():.2f}").set_color(YELLOW).to_corner(UL))
+        label_a = always_redraw(lambda: MathTex(
+            f"a={a.get_value():.2f}"
+        ).set_color(YELLOW).to_corner(UL))
         
-        area_text = MathTex(r"\int_{-\infty}^{\infty} f(x) \, dx = 1", color=GREEN).to_corner(UR)
+        area_text = MathTex(
+            r"\int_{-\infty}^{\infty} f(x) \, dx = 1", 
+            color=GREEN
+        ).to_corner(UR)
         
         self.play(Create(graph), Create(area), Write(label_a), Write(area_text))
         self.wait(1)
 
-        self.play(a.animate.set_value(0.05), run_time=5, rate_func=rate_functions.ease_in_cubic)
+        # animate parameter to approach delta function
+        self.play(
+            a.animate.set_value(0.05), 
+            run_time=5, 
+            rate_func=rate_functions.ease_in_cubic
+        )
         self.wait(1)
 
-        narration = Text("Infinitely tall and narrow, but area remains 1", 
-                        font_size=24, color=WHITE).next_to(question, DOWN)
+        narration = Text(
+            "Infinitely tall and narrow, but area remains 1", 
+            font_size=24, 
+            color=WHITE
+        ).next_to(question, DOWN)
         self.play(Write(narration))
         self.wait(1)
 
-        # Transform to idealized delta function
+        # transform to idealized delta function
         self.play(FadeOut(question), FadeOut(narration))
         
-        # Create the idealized delta function
+        # create idealized delta function
         vline = Line(
             start=axes.c2p(0, 0),
             end=axes.c2p(0, axes.y_range[1]),
@@ -395,7 +516,7 @@ class DiracDeltaApproximation(Scene):
         infinity = MathTex(r"\infty", color=RED, font_size=36).next_to(vline, UP)
         delta_label = MathTex(r"\delta(x)", color=RED, font_size=24).next_to(vline, DOWN)
 
-        # Fade out the graph and show the idealized delta
+        # fade out graph and show idealized delta
         self.play(
             graph.animate.set_opacity(0.3), 
             area.animate.set_opacity(0.1),
@@ -412,7 +533,11 @@ class DiracDeltaApproximation(Scene):
         self.play(Write(final_title))
         self.wait(2)
 
-        self.play(FadeOut(VGroup(axes, graph, area, label_a, area_text, vline, infinity, delta_label, final_title)))
+        # cleanup
+        all_objects = VGroup(
+            axes, graph, area, label_a, area_text, vline, infinity, delta_label, final_title
+        )
+        self.play(FadeOut(all_objects))
 
 
 class SpikeTrainAsDeltas(SpikeScene):
@@ -422,15 +547,13 @@ class SpikeTrainAsDeltas(SpikeScene):
         self.setup_axes("Amplitude")
         self.setup_spikes()
 
-        # Scene 4
         title = Text("The Neural Spike Train", font_size=32, color=YELLOW).to_edge(UP)
         self.play(Write(title))
 
-        spike_times = []
-        for i, spk in enumerate(self.spikes):
-            if spk:
-                spike_times.append(self.time_points[i])
+        # find spike times
+        spike_times = [self.time_points[i] for i, spk in enumerate(self.spikes) if spk]
 
+        # create spike lines
         spike_lines = VGroup()
         for t in spike_times:
             line_start = self.axes.c2p(t, 0)
@@ -441,6 +564,7 @@ class SpikeTrainAsDeltas(SpikeScene):
         self.play(Create(spike_lines))
         self.wait(1)
 
+        # replace with delta symbols
         delta_symbols = VGroup()
         for t in spike_times:
             point = self.axes.c2p(t, SPIKE_HEIGHT)
@@ -453,6 +577,7 @@ class SpikeTrainAsDeltas(SpikeScene):
         )
         self.wait(1)
 
+        # build equation
         equation_parts = VGroup()
         
         rho_part = MathTex(r"\rho(t) = ", font_size=36).to_edge(UP).shift(DOWN)
@@ -471,6 +596,7 @@ class SpikeTrainAsDeltas(SpikeScene):
         self.play(full_equation.animate.to_edge(UP).shift(DOWN * 0.5))
         self.wait(1)
 
+        # add time labels
         time_labels = VGroup()
         for i, t in enumerate(spike_times[:5]):
             label = MathTex(f"t_{i}", font_size=20, color=YELLOW)
@@ -480,17 +606,24 @@ class SpikeTrainAsDeltas(SpikeScene):
         self.play(LaggedStart(*[Write(label) for label in time_labels], lag_ratio=0.3))
         self.wait(1)
 
-        shift_explanation = Text("Each δ(t - t_i) shifts the delta to time t_i", 
-                               font_size=20, color=WHITE).next_to(full_equation, DOWN)
+        # explanations
+        shift_explanation = Text(
+            "Each δ(t - t_i) shifts the delta to time t_i", 
+            font_size=20, 
+            color=WHITE
+        ).next_to(full_equation, DOWN)
         self.play(Write(shift_explanation))
         self.wait(1)
 
-        sum_explanation = Text("∑ adds up all the deltas", 
-                             font_size=20, color=WHITE).next_to(shift_explanation, DOWN)
+        sum_explanation = Text(
+            "∑ adds up all the deltas", 
+            font_size=20, 
+            color=WHITE
+        ).next_to(shift_explanation, DOWN)
         self.play(Write(sum_explanation))
         self.wait(1)
 
-        # Use spike_curve animation to give deltas visual height
+        # animate spike curve
         collapsed = spike_curve(self.axes, self.time_points, self.spikes, collapsed=True)
         curve = spike_curve(self.axes, self.time_points, self.spikes)
         
@@ -498,12 +631,20 @@ class SpikeTrainAsDeltas(SpikeScene):
         self.play(Create(collapsed))
         self.play(Transform(collapsed, curve, run_time=3))
 
-        final_text = Text("ρ(t): Our fundamental mathematical description of a neuron's output", 
-                         font_size=24, color=GREEN).next_to(sum_explanation, DOWN)
+        final_text = Text(
+            "ρ(t): Our fundamental mathematical description of a neuron's output", 
+            font_size=24, 
+            color=GREEN
+        ).next_to(sum_explanation, DOWN)
         self.play(Write(final_text))
         self.wait(2)
 
-        self.play(FadeOut(VGroup(title, full_equation, shift_explanation, sum_explanation, final_text, collapsed, self.axes)))
+        # cleanup
+        all_objects = VGroup(
+            title, full_equation, shift_explanation, sum_explanation, 
+            final_text, collapsed, self.axes
+        )
+        self.play(FadeOut(all_objects))
 
 
 class SimpleAverage(SpikeScene):
@@ -687,7 +828,7 @@ class SimpleAverage(SpikeScene):
 
 
 class DiscreteBinGraph(SpikeScene):
-    """bins the spike train and shows histogram‑like bars."""
+    """bins the spike train and shows histogram-like bars."""
 
     def construct(self):
         self.setup_axes("Count")
@@ -714,7 +855,7 @@ class DiscreteBinGraph(SpikeScene):
         self.play(FadeOut(critique), FadeOut(rate_intro))
 
         # ------- discrete bins -------
-        bin_lines, containers, bars = create_binned_visualisation(
+        bin_lines, containers, bars = create_binned_visualization(
             self.axes, self.time_points, self.spikes, num_bins=15
         )
 
@@ -736,7 +877,7 @@ class DiscreteBinGraph(SpikeScene):
         self.wait(1)
 
         for n in (5, 10, 20, 30):
-            nl, nc, nb = create_binned_visualisation(self.axes, self.time_points, self.spikes, n)
+            nl, nc, nb = create_binned_visualization(self.axes, self.time_points, self.spikes, n)
             txt = Text(f"Bins: {n}", font_size=24, color=YELLOW).to_corner(RIGHT)
             self.play(
                 FadeOut(bin_lines), FadeOut(containers), FadeOut(bars), Write(txt)
@@ -822,7 +963,7 @@ class SlidingWindowApprox(SpikeScene):
 
 
 class GaussianWindow(SpikeScene):
-    """Smooths the rectangular sliding‑window estimate with a Gaussian kernel."""
+    """Smooths the rectangular sliding-window estimate with a Gaussian kernel."""
 
     def construct(self):
         self.setup_axes("Count")
@@ -921,7 +1062,7 @@ class GaussianWindow(SpikeScene):
 
 
 class AlphaHalfWindow(SpikeScene):
-    """Causal α‑function smoothing – ignores future spikes."""
+    """Causal α-function smoothing – ignores future spikes."""
 
     def construct(self):
         self.setup_axes("Rate")
@@ -1039,80 +1180,75 @@ class TuningCurve(Scene):
         self.play(Write(title))
         self.wait(1)
 
+        # stimulus section
         stimulus_title = Text("Stimulus", font_size=24, color=WHITE).to_corner(UL).shift(DOWN)
         self.play(Write(stimulus_title))
 
+        # create rotating bar with proper angle tracking
         bar_length = 2
-        bar = Line(start=[-bar_length/2, 0, 0], end=[bar_length/2, 0, 0], 
-                  stroke_width=8, color=WHITE)
-        bar.move_to(LEFT * 3 + DOWN)
-        bar_current_angle = 0  # Track the current angle manually
-        self.play(Create(bar))
-
+        bar = Line(
+            start=[-bar_length/2, 0, 0], 
+            end=[bar_length/2, 0, 0], 
+            stroke_width=8, 
+            color=WHITE
+        ).move_to(LEFT * 3 + DOWN)
+        
+        # create dial with angle indicator
         dial_radius = 0.8
         dial = Circle(radius=dial_radius, stroke_color=WHITE, stroke_width=2)
         dial.move_to(bar.get_center() + UP * 1.5)
         
-        angle_line = Line(dial.get_center(), dial.get_center() + RIGHT * dial_radius, 
-                         stroke_color=RED, stroke_width=3)
-        angle_line_current_angle = 0  # Track the current angle manually
+        angle_indicator = Line(
+            dial.get_center(), 
+            dial.get_center() + RIGHT * dial_radius, 
+            stroke_color=RED, 
+            stroke_width=3
+        )
         
-        angle_label = MathTex(r"\text{Angle} = 0°", font_size=20, color=RED)
-        angle_label.next_to(dial, UP)
+        angle_label = MathTex(r"\text{Angle} = 0°", font_size=20, color=RED).next_to(dial, UP)
         
-        self.play(Create(dial), Create(angle_line), Write(angle_label))
+        self.play(Create(bar), Create(dial), Create(angle_indicator), Write(angle_label))
         self.wait(1)
 
+        # response section
         response_title = Text("Neural Response", font_size=24, color=WHITE).to_corner(UR).shift(DOWN)
         self.play(Write(response_title))
 
         spike_axes = create_axes(
-            x_range=(0, 2, 0.5), y_range=(0, 1, 0.2), 
-            length=(3, 2), label_x="Time (s)", label_y=""
+            x_range=(0, 2, 0.5), 
+            y_range=(0, 1, 0.2), 
+            length=(3, 2), 
+            label_x="Time (s)", 
+            label_y=""
         ).move_to(RIGHT * 3 + DOWN)
         self.play(Create(spike_axes))
 
         tuning_axes = create_axes(
-            x_range=(0, 180, 30), y_range=(0, 50, 10), 
-            length=(6, 3), label_x="Stimulus Orientation (degrees)", label_y="Firing Rate (Hz)"
+            x_range=(0, 180, 30), 
+            y_range=(0, 50, 10), 
+            length=(6, 3), 
+            label_x="Stimulus Orientation (degrees)", 
+            label_y="Firing Rate (Hz)"
         ).move_to(DOWN * 2.5)
         self.play(Create(tuning_axes))
 
-        def generate_spike_train_for_orientation(angle_deg):
-            max_rate = 45  # Hz
-            min_rate = 5   # Hz
-            preferred_angle = 90  # degrees
-            
-            rate = min_rate + (max_rate - min_rate) * np.exp(-((angle_deg - preferred_angle) ** 2) / (2 * 30 ** 2))
-            
-            dt = 0.01
-            t = np.arange(0, 2, dt)
-            spikes = np.random.rand(len(t)) < rate * dt
-            return t, spikes, rate
-
+        # test different orientations
         angles = [0, 30, 45, 60, 90, 120, 135, 150, 180]
         measured_rates = []
         tuning_points = []
 
         for angle in angles:
-            new_angle_rad = np.radians(angle)
-            angle_diff = new_angle_rad - bar_current_angle
-            bar.rotate(angle_diff)
-            bar_current_angle = new_angle_rad
+            # rotate bar and angle indicator
+            bar.rotate_about_origin(np.radians(angle))
+            angle_indicator.rotate_about_origin(np.radians(angle))
             
-            angle_diff_line = new_angle_rad - angle_line_current_angle
-            angle_line.rotate(angle_diff_line)
-            angle_line_current_angle = new_angle_rad
-            
-            new_angle_label = MathTex(f"\\text{Angle} = {angle}°", font_size=20, color=RED)
+            new_angle_label = MathTex(f"\\text{{Angle}} = {angle}°", font_size=20, color=RED)
             new_angle_label.next_to(dial, UP)
-            self.play(
-                Transform(angle_label, new_angle_label),
-                run_time=0.5
-            )
+            self.play(Transform(angle_label, new_angle_label), run_time=0.5)
 
-            t, spikes, rate = generate_spike_train_for_orientation(angle)
-            spike_curve_obj = spike_curve(spike_axes, t, spikes, height=0.8)
+            # generate spike train for this orientation
+            spike_data = generate_spike_train_for_orientation(angle)
+            spike_curve_obj = spike_curve(spike_axes, spike_data.time_points, spike_data.spikes, height=0.8)
             
             # clear previous spike train
             if hasattr(self, 'current_spike_curve'):
@@ -1121,34 +1257,43 @@ class TuningCurve(Scene):
             self.play(Create(spike_curve_obj), run_time=1)
             self.current_spike_curve = spike_curve_obj
             
-            rate_text = Text(f"Rate: {rate:.1f} Hz", font_size=18, color=GREEN).next_to(spike_axes, UP)
+            # show rate
+            rate_text = Text(f"Rate: {spike_data.rate:.1f} Hz", font_size=18, color=GREEN).next_to(spike_axes, UP)
             if hasattr(self, 'current_rate_text'):
                 self.play(ReplacementTransform(self.current_rate_text, rate_text))
             else:
                 self.play(Write(rate_text))
             self.current_rate_text = rate_text
             
-            measured_rates.append(rate)
+            measured_rates.append(spike_data.rate)
             
-            # plot
-            point = Dot(tuning_axes.c2p(angle, rate), color=RED, radius=0.08)
+            # plot point on tuning curve
+            point = Dot(tuning_axes.c2p(angle, spike_data.rate), color=RED, radius=0.08)
             tuning_points.append(point)
             self.play(Create(point))
             
             self.wait(0.5)
 
+        # create tuning curve
         curve_points = [tuning_axes.c2p(angle, rate) for angle, rate in zip(angles, measured_rates)]
         tuning_curve = VMobject(color=BLUE, stroke_width=3).set_points_smoothly(curve_points)
         self.play(Create(tuning_curve))
         
-        explanation = Text("This is the neuron's tuning curve - its preference map", 
-                          font_size=20, color=BLUE).next_to(tuning_axes, DOWN)
+        explanation = Text(
+            "This is the neuron's tuning curve - its preference map", 
+            font_size=20, 
+            color=BLUE
+        ).next_to(tuning_axes, DOWN)
         self.play(Write(explanation))
         self.wait(2)
 
-        self.play(FadeOut(VGroup(title, stimulus_title, response_title, bar, dial, angle_line, angle_label, 
-                                spike_axes, tuning_axes, tuning_curve, explanation, self.current_spike_curve, 
-                                self.current_rate_text, *tuning_points)))
+        # cleanup
+        all_objects = VGroup(
+            title, stimulus_title, response_title, bar, dial, angle_indicator, angle_label,
+            spike_axes, tuning_axes, tuning_curve, explanation, self.current_spike_curve, 
+            self.current_rate_text, *tuning_points
+        )
+        self.play(FadeOut(all_objects))
 
 
 class DecodingMind(Scene):
@@ -1159,18 +1304,24 @@ class DecodingMind(Scene):
         self.play(Write(title))
         self.wait(1)
 
+        # create tuning curve
         tuning_axes = create_axes(
-            x_range=(0, 180, 30), y_range=(0, 50, 10), 
-            length=(6, 3), label_x="Stimulus Orientation (degrees)", label_y="Firing Rate (Hz)"
+            x_range=(0, 180, 30), 
+            y_range=(0, 50, 10), 
+            length=(6, 3), 
+            label_x="Stimulus Orientation (degrees)", 
+            label_y="Firing Rate (Hz)"
         ).move_to(LEFT * 2)
         self.play(Create(tuning_axes))
 
+        # generate smooth tuning curve
         angles = np.linspace(0, 180, 100)
-        rates = 5 + 40 * np.exp(-((angles - 90) ** 2) / (2 * 30 ** 2))
+        rates = np.array([generate_tuning_curve_rate(angle) for angle in angles])
         curve_points = [tuning_axes.c2p(angle, rate) for angle, rate in zip(angles, rates)]
         tuning_curve = VMobject(color=BLUE, stroke_width=3).set_points_smoothly(curve_points)
         self.play(Create(tuning_curve))
 
+        # hidden stimulus
         stimulus_title = Text("Stimulus (Hidden)", font_size=24, color=WHITE).to_corner(UR).shift(DOWN)
         self.play(Write(stimulus_title))
 
@@ -1179,12 +1330,17 @@ class DecodingMind(Scene):
         question_mark = Text("?", font_size=48, color=YELLOW).next_to(bar, UP)
         self.play(Create(bar), Write(question_mark))
 
+        # spike train display
         spike_axes = create_axes(
-            x_range=(0, 2, 0.5), y_range=(0, 1, 0.2), 
-            length=(3, 2), label_x="Time (s)", label_y=""
+            x_range=(0, 2, 0.5), 
+            y_range=(0, 1, 0.2), 
+            length=(3, 2), 
+            label_x="Time (s)", 
+            label_y=""
         ).move_to(RIGHT * 3 + UP)
         self.play(Create(spike_axes))
 
+        # generate spike train for target rate
         target_rate = 35
         dt = 0.01
         t = np.arange(0, 2, dt)
@@ -1195,45 +1351,51 @@ class DecodingMind(Scene):
         rate_text = Text(f"Measured Rate: {target_rate} Hz", font_size=18, color=GREEN).next_to(spike_axes, UP)
         self.play(Write(rate_text))
 
+        # decoding process
         decoding_title = Text("Decoding Process", font_size=20, color=YELLOW).next_to(title, DOWN)
         self.play(Write(decoding_title))
 
-        # Horizontal line to the tuning curve
+        # horizontal line to tuning curve
         horizontal_line = Line(
             start=tuning_axes.c2p(0, target_rate),
             end=tuning_axes.c2p(180, target_rate),
-            color=RED, stroke_width=2
+            color=RED, 
+            stroke_width=2
         )
         self.play(Create(horizontal_line))
 
-        # Vertical line down to x-axis
+        # find intersection and draw vertical line
         target_angle = angles[np.argmin(np.abs(rates - target_rate))]
         vertical_line = Line(
             start=tuning_axes.c2p(target_angle, target_rate),
             end=tuning_axes.c2p(target_angle, 0),
-            color=RED, stroke_width=2
+            color=RED, 
+            stroke_width=2
         )
         self.play(Create(vertical_line))
 
-        # Show decoded angle
-        decoded_angle = MathTex(f"\\text{Angle} = {target_angle:.0f}°", font_size=24, color=RED)
+        # show decoded angle
+        decoded_angle = MathTex(f"\\text{{Angle}} = {target_angle:.0f}°", font_size=24, color=RED)
         decoded_angle.next_to(tuning_axes, DOWN)
         self.play(Write(decoded_angle))
 
-        # Rotate the bar to show the decoded orientation
-        new_angle_rad = np.radians(target_angle)
-        bar.rotate(new_angle_rad)
-        self.play(
-            FadeOut(question_mark),
-            run_time=1
-        )
+        # rotate bar to show decoded orientation
+        bar.rotate_about_origin(np.radians(target_angle))
+        self.play(FadeOut(question_mark), run_time=1)
 
-        final_explanation = Text("By listening to spikes, we can read the mind!", 
-                               font_size=20, color=GREEN).next_to(decoded_angle, DOWN)
+        final_explanation = Text(
+            "By listening to spikes, we can read the mind!", 
+            font_size=20, 
+            color=GREEN
+        ).next_to(decoded_angle, DOWN)
         self.play(Write(final_explanation))
         self.wait(2)
 
-        self.play(FadeOut(VGroup(title, decoding_title, tuning_axes, tuning_curve, stimulus_title, 
-                                bar, spike_axes, spike_curve_obj, rate_text, horizontal_line, 
-                                vertical_line, decoded_angle, final_explanation)))
+        # cleanup
+        all_objects = VGroup(
+            title, decoding_title, tuning_axes, tuning_curve, stimulus_title, 
+            bar, spike_axes, spike_curve_obj, rate_text, horizontal_line, 
+            vertical_line, decoded_angle, final_explanation
+        )
+        self.play(FadeOut(all_objects))
 
